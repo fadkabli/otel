@@ -1,0 +1,126 @@
+OTEL Configuration for CBONBoarding
+This document provides a step-by-step guide to configuring OpenTelemetry (OTEL) for CBONBoarding on ECS, sending data to CloudWatch and X-Ray. Below is a comprehensive setup divided into essential steps and configurations.
+
+Table of Contents
+Prerequisites
+Dockerfile Configuration
+Terraform Configuration
+Variables
+Main Configuration
+otel-config.yml
+Applying the Configuration
+Verification and Testing
+Post-Deployment Monitoring
+Troubleshooting Common Issues
+Conclusion
+
+
+Dockerfile Configuration
+Add OpenTelemetry Java Agent: Incorporate the AWS OpenTelemetry Java Agent into the Docker image.
+# Download the OpenTelemetry Java Agent
+ADD https://artifacts-read.gkp.jpmchase.net/artifactory/maven/software/amazon/opentelemetry/aws-opentelemetry-agent/1.24.0/aws-opentelemetry-agent-1.24.0.jar /opt/aws-opentelemetry-agent.jar
+
+# Change ownership to 'jpmenobody' user (least permissions account)
+RUN chown -R jpmenobody:jpmenobody /app/ && chown jpmenobody:jpmenobody /opt/aws-opentelemetry-agent.jar
+
+
+Terraform Configuration
+Variables
+variables.tf: Define the configuration object which includes env_type.
+variable "config" {
+  type = object({
+    <app_name>_deployment = object({
+      cluster_name = string,
+      app_name     = string,
+      env_type     = string
+      ...
+    })
+  })
+}
+
+variables/<local|dev|test|prod>.tfvars: Specifying values for different environments.
+
+config = {
+  <app_name>_deployment = {
+    cluster_name = "<cluster-name>",
+    app_name     = "gateway",
+    app_env_variables = [
+      { "name": "JAVA_TOOL_OPTIONS", "value": "-javaagent:/opt/aws-opentelemetry-agent.jar" }
+    ],
+    env_type = "<dev|test|prod>"
+  }
+}
+
+main.tf: Update the cluster to reference the OpenTelemetry Collector configuration file.
+locals {
+  otel_metrics_config = templatefile("${path.module}/resources/otel-config.yml", {
+    aws_region   = var.aws_region,
+    cluster_name = var.config.<app_name>_deployment.cluster_name,
+    app_name     = var.config.<app_name>_deployment.app_name,
+    env_type     = var.config.<app_name>_deployment.env_type
+  })
+}
+
+module "<app_name>_deployment" {
+  source              = "tfe.jpmchase.net/ATLAS-MODULE-REGISTRY/ecs-application/aws"
+  version             = "1.6.0"
+  datadog_enabled     = true
+  otel_metrics_config = local.otel_metrics_config
+  ...
+}
+
+otel-config.yml
+Generate otel-config.yml via Kickstart: Create a local copy of the otel-config.yml file by using the OpenTelemetry Kickstart form for ECS Fargate. Fill the form as shown in the relevant screenshot provided.
+Example Configuration:
+Sample kickstart.yml:
+receivers:
+  otlp:
+    protocols:
+      grpc:
+      http:
+processors:
+  batch:
+exporters:
+  logging:
+  awsxray:
+  awsemf:
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [logging, awsemf]
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [awsxray, logging]
+
+
+Initialize Terraform:
+terraform init
+
+Apply Configuration: Apply
+
+terraform apply -var-file=variables/<local|dev|test|prod>.tfvars
+
+Verification and Testing
+Deploy Application: Deploy the application to the ECS cluster and monitor for correct metrics and tracing.
+Verify Logs and Metrics:
+CloudWatch: Ensure the logs and metrics are being sent correctly.
+X-Ray: Confirm that traces are being captured and visualized in AWS X-Ray.
+Debugging: If issues arise, check:
+Docker container logs for any errors related to OpenTelemetry.
+Terraform apply logs for any misconfigurations.
+
+Post-Deployment Monitoring
+Validate Data in CloudWatch: Validate that metrics and logs are correctly appearing in CloudWatch dashboards and log groups.
+Verify Traces in X-Ray: Check for proper trace data and its visual representation in AWS X-Ray.
+
+By following this comprehensive guide, you should be able to successfully configure OpenTelemetry for CBONBoarding on ECS with data flowing to CloudWatch and X-Ray. Properly setting up monitoring and tracing will enable better observability and troubleshooting capabilities for your applications.
+
+
+For further assistance or advanced configurations, consider the following resources:
+
+
+
+
